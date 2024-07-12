@@ -28,6 +28,7 @@
     take_member/1,
     take_member/2,
     take_group_member/1,
+    take_group_member/2,
     return_group_member/2,
     return_group_member/3,
     group_pools/1,
@@ -410,12 +411,13 @@ take_member(PoolName) when is_atom(PoolName) orelse is_pid(PoolName) ->
 take_member(PoolName, Timeout) when is_atom(PoolName) orelse is_pid(PoolName) ->
     gen_server:call(PoolName, {take_member, time_as_millis(Timeout)}, infinity).
 
+take_group_member(GroupName) -> take_group_member(GroupName, 0).
 %% @doc Take a member from a randomly selected member of the group
 %% `GroupName'. Returns `MemberPid' or `error_no_members'.  If no
 %% members are available in the randomly chosen pool, all other pools
 %% in the group are tried in order.
--spec take_group_member(group_name()) -> pid() | error_no_members.
-take_group_member(GroupName) ->
+%%-spec take_group_member(group_name()) -> pid() | error_no_members.
+take_group_member(GroupName, Timeout) ->
     case pg_get_local_members(GroupName) of
         [] ->
             error_no_members;
@@ -425,18 +427,26 @@ take_group_member(GroupName) ->
             {_, _, X} = os:timestamp(),
             Idx = (X rem length(Pools)) + 1,
             {PoolPid, Rest} = extract_nth(Idx, Pools),
-            take_first_pool([PoolPid | Rest])
+            %%take_first_pool([PoolPid | Rest])
+            case {take_first_pool([PoolPid | Rest], 0), Timeout} of
+                {error_no_members, 0} ->
+                    error_no_members;
+                {error_no_members, _} ->
+                    take_first_pool([PoolPid | Rest], Timeout);
+                {Member, _} ->
+                    Member
+            end
     end.
 
-take_first_pool([PoolPid | Rest]) ->
-    case take_member(PoolPid) of
+take_first_pool([PoolPid | Rest], Timeout) ->
+    case take_member(PoolPid, Timeout) of
         error_no_members ->
-            take_first_pool(Rest);
+            take_first_pool(Rest, Timeout);
         Member ->
             ets:insert(?POOLER_GROUP_TABLE, {Member, PoolPid}),
             Member
     end;
-take_first_pool([]) ->
+take_first_pool([], _) ->
     error_no_members.
 
 %% this helper function returns `{Nth_Elt, Rest}' where `Nth_Elt' is
